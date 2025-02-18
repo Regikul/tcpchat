@@ -37,6 +37,10 @@ start_link() ->
 init(_) ->
   ?LOG_INFO("Starting auth_db"),
   Tab = ets:new(?TAB, [named_table, set, protected, {keypos, #auth.login}]),
+  lists:foreach(fun (#auth{} = Auth) -> ets:insert(?TAB, Auth) end, [
+    #auth{login = <<"alice">>, passw = <<"alice">>},
+    #auth{login = <<"bob">>, passw = <<"bob">>}
+  ]),
   {ok, #state{tab = Tab}}.
 
 handle_call(Request, From, #state{} = State) ->

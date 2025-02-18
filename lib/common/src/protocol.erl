@@ -92,8 +92,10 @@ encode(#auth_sucess{}) ->
     <<"auth_sucess:\n\n">>;
 encode(#auth_error{status = Status}) when Status =:= <<"already_connected">>; Status =:= <<"auth_error">> ->
     <<"auth_error:\n", Status/binary, "\n\n">>;
+encode(#message{from = undefined, txt = Text}) ->
+    <<"msg:\n", Text/binary, "\n\n">>;
 encode(#message{from = From, txt = Text}) ->
-    <<"msg:\n", From/binary, "\n", Text/binary, "\n\n">>.
+    <<"msg:\n", Text/binary, "\n", From/binary, "\n\n">>.
 
 pattern() -> binary:compile_pattern([?DELIMETER1, ?DELIMETER2]).
 split(Subject) -> binary:split(Subject, pattern()).
@@ -158,6 +160,31 @@ keep_trailing_buffer() ->
     ?assertMatch({ok, {#auth{}, TrailingData}}, decode(<<AuthData/binary, TrailingData/binary>>)),
     ?assertMatch({ok, {#message{}, TrailingData}}, decode(<<MessageData/binary, TrailingData/binary>>)),
     ?assertMatch({ok, {#message{}, TrailingData}}, decode(<<SignedMessageData/binary, TrailingData/binary>>)).
+
+symmetric_protocol_auth_test() ->
+    Packet = #auth{login = <<"alice">>, passw = <<"passw">>},
+    Data = protocol:encode(Packet),
+    ?assertEqual({ok, {Packet, <<>>}}, decode(Data)).
+
+symmetric_protocol_message_test() ->
+    Packet = #message{txt = <<"hello">>},
+    Data = protocol:encode(Packet),
+    ?assertEqual({ok, {Packet, <<>>}}, decode(Data)).
+
+symmetric_protocol_signed_message_test() ->
+    Packet = #message{from = <<"Alice">>, txt = <<"hello">>},
+    Data = protocol:encode(Packet),
+    ?assertEqual({ok, {Packet, <<>>}}, decode(Data)).
+
+symmetric_protocol_auth_success_test() ->
+    Packet = #auth_sucess{},
+    Data = protocol:encode(Packet),
+    ?assertEqual({ok, {Packet, <<>>}}, decode(Data)).
+
+symmetric_protocol_auth_error_test() ->
+    Packet = #auth_error{status = <<"auth_error">>},
+    Data = protocol:encode(Packet),
+    ?assertEqual({ok, {Packet, <<>>}}, decode(Data)).
 
 decode_all_single_packet_test() ->
     ?assertMatch({ok, {_, [#auth{}]}}, decode_all(new(), auth_data(?DELIMETER1))).

@@ -6,7 +6,7 @@
 -include_lib("kernel/include/logger.hrl").
 -include_lib("common/include/common.hrl").
 
--record(state, {sock, transport, protocol}).
+-record(state, {sock, transport, protocol, login}).
 
 -export([start_link/3, init/1, handle_continue/2, handle_call/3, handle_cast/2, handle_info/2]).
 
@@ -23,25 +23,31 @@ handle_continue({handshake, Ref, Transport}, []) ->
     logger:set_process_metadata(#{token => peername(State)}),
     {noreply, State}.
 
-handle_call(_Request, _From, #state{} = State) ->
+handle_call(Request, From, #state{} = State) ->
+    ?LOG_INFO("~p sends unknown cast: ~p", [From, Request]),
     {reply, unimlp, State}.
 
-handle_cast(_Request, #state{} = State) ->
+handle_cast(Request, #state{} = State) ->
+    ?LOG_INFO("unknown cast: ~p", [Request]),
     {noreply, State}.
 
 handle_method(#auth{login = Login} = Auth, #state{} = State) ->
     maybe
       {_, ok}           ?= {auth_check,  srv_auth_db:authenticate(Auth)},
       {_, ok}           ?= {connection_check, srv_session_db:try_write_session(Login, self())},
-      send(State, protocol:encode(#auth_sucess{}))
+      send(State, #auth_sucess{}),
+      State#state{login = Login}
     else
-        {auth_check, _} -> send(State, #auth_error{status = <<"auth_error">>});
-        {connection_check, _} -> send(State, #auth_error{status = <<"already_connected">>})
-    end,
-    State;
-handle_method(#message{} = Message, #state{} = State) ->
+        {auth_check, _} ->
+            send(State, #auth_error{status = <<"auth_error">>}),
+            State;
+        {connection_check, _} ->
+            send(State, #auth_error{status = <<"already_connected">>}),
+            State
+    end;
+handle_method(#message{} = Message, #state{login = Login} = State) ->
     Connections = srv_session_db:query_connections(),
-    lists:foreach(fun (C) -> C ! {send, Message} end, Connections),
+    lists:foreach(fun (C) -> C ! {send, Message#message{from = Login}} end, Connections),
     State.
 
 handle_info({tcp, Socket, Data}, #state{sock = Socket, protocol = Protocol} = State) ->
@@ -60,7 +66,11 @@ handle_info({tcp_closed, Socket}, #state{sock = Socket} = State) ->
     {stop, normal, State};
 handle_info({tcp_error, Socket, Reason}, #state{sock = Socket} = State) ->
     {stop, Reason, State};
-handle_info(_Info, #state{} = State) ->
+handle_info({send, PacketOfBuffer}, #state{} = State) ->
+    send(State, PacketOfBuffer),
+    {noreply, State};
+handle_info(Info, #state{} = State) ->
+    ?LOG_INFO("unknown info: ~p", [Info]),
     {noreply, State}.
 
 setopts(#state{sock = Socket, transport = Transport}, Opts) ->
@@ -73,5 +83,7 @@ peername(#state{sock = Socket, transport = Transport}) ->
         lists:join($., Symbolic), ":", integer_to_list(Port)
     ]).
 
-send(#state{sock = Socket, transport = Transport}, Buffer) ->
-    Transport:send(Socket, Buffer).
+send(#state{sock = Socket, transport = Transport}, ?NE_BINARY_PAT = Buffer) ->
+    Transport:send(Socket, Buffer);
+send(#state{sock = Socket, transport = Transport}, Packet) ->
+    Transport:send(Socket, protocol:encode(Packet)).

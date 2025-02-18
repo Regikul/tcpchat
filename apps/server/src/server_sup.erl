@@ -32,7 +32,8 @@ init([]) ->
                  intensity => 1,
                  period => 1},
     ChildSpecs = [
-        ?WORKER(srv_registrar, []),
+        ?WORKER(srv_auth_db, []),
+        ?WORKER(srv_session_db, []),
         ranch:child_spec(chat_listener_pool, ranch_tcp, #{socket_opts => [{port, 5555}]}, srv_listener, [])
     ],
     {ok, {SupFlags, ChildSpecs}}.

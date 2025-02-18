@@ -4,6 +4,7 @@
 
 -define(DELIMETER1, <<"\n">>).
 -define(DELIMETER2, <<"\r\n">>).
+-define(EOP, <<>>). %% End-Of-Packet
 
 -export([new/0, decode_all/2, encode/1]).
 
@@ -27,7 +28,7 @@ decode_loop(#protocol{buffer = Buffer} = P, Acc) when is_list(Acc) ->
     case decode(Buffer) of
         {ok, {Packet, Rest}} -> decode_loop(#protocol{buffer = Rest}, [Packet | Acc]);
         {error, incomplete} -> {ok, {#protocol{buffer = Buffer}, lists:reverse(Acc)}};
-        {error, {{failed_at, Step}, Acc}} when Step =/= eop -> {ok, {P, lists:reverse(Acc)}};
+        {error, {failed_at, Step}} when Step =/= eop -> {ok, {P, lists:reverse(Acc)}};
         {error, Reason} -> {error, {Reason, lists:reverse(Acc)}}
     end.
 
@@ -40,12 +41,15 @@ decode(Input) ->
     end.
 
 decode(<<"auth:">>, Rest) ->
+    ?LOG_INFO("trying to parse auth: ~p", [Rest]),
     maybe
         {_, [?NE_BINARY_PAT = Login, MaybePassw]}     ?= {login, split(Rest)},
         {_, [?NE_BINARY_PAT = Passw, MaybeFinalizer]} ?= {passw, split(MaybePassw)},
-        {_, [<<>>, NextBuffer]}                       ?= {eop, split(MaybeFinalizer)},
+        {_, [?EOP, NextBuffer]}                       ?= {eop, split(MaybeFinalizer)},
         {ok, {#auth{login = Login, passw = Passw}, NextBuffer}}
     else
+        {Step, [?EOP, ?EOP]} when Step =/= eop -> {error, malformed};
+        {_Step = eop, [?EOP]} -> {error, incomplete};
         {Step, _} -> {error, {'failed_at', Step}}
     end;
 decode(<<"msg:">>, Rest) ->
@@ -53,11 +57,30 @@ decode(<<"msg:">>, Rest) ->
         {_, [?NE_BINARY_PAT = Text, MaybeFrom]} ?= {text, split(Rest)},
         {From, MaybeFinalizer} = case split(MaybeFrom) of
             [?NE_BINARY_PAT = User, Continue] -> {User, Continue};
-            [<<>>, _NextBuffer] -> {undefined, MaybeFrom}
+            [?EOP, _NextBuffer] -> {undefined, MaybeFrom};
+            [?EOP] -> {undefined, <<>>}
         end,
-        {_, [<<>>, NextBuffer]} ?= {eop, split(MaybeFinalizer)},
+        {_, [?EOP, NextBuffer]} ?= {eop, split(MaybeFinalizer)},
         {ok, {#message{from = From, txt = Text}, NextBuffer}}
     else
+        {Step, [?EOP, ?EOP]} when Step =/= eop -> {error, malformed};
+        {_Step = eop, [?EOP]} -> {error, incomplete};
+        {Step, _} -> {error, {'failed_at', Step}}
+    end;
+decode(<<"auth_sucess:">>, Rest) ->
+    case split(Rest) of
+        [?EOP, NextBuffer] -> {ok, {#auth_sucess{}, NextBuffer}};
+        _Else -> {error, {'failed_at', eop}}
+    end;
+decode(<<"auth_error:">>, Rest) ->
+    maybe
+        {_, [?NE_BINARY_PAT = Reason, MaybeFinalizer]} ?= {reason, split(Rest)},
+        {_, true} ?= {reason_text, lists:member(Reason, [<<"already_connected">>, <<"auth_error">>])},
+        {_, [?EOP, NextBuffer]} ?= {eop, split(MaybeFinalizer)},
+        {ok, {#auth_error{status = Reason}, NextBuffer}}
+    else
+        {Step, [?EOP, ?EOP]} when Step =/= eop -> {error, malformed};
+        {_Step = eop, [?EOP]} -> {error, incomplete};
         {Step, _} -> {error, {'failed_at', Step}}
     end;
 decode(_Method, _) ->
@@ -65,6 +88,10 @@ decode(_Method, _) ->
 
 encode(#auth{login = Login, passw = Password}) ->
     <<"auth:\n", Login/binary, "\n", Password/binary, "\n\n">>;
+encode(#auth_sucess{}) ->
+    <<"auth_sucess:\n\n">>;
+encode(#auth_error{status = Status}) when Status =:= <<"already_connected">>; Status =:= <<"auth_error">> ->
+    <<"auth_error:\n", Status/binary, "\n\n">>;
 encode(#message{from = From, txt = Text}) ->
     <<"msg:\n", From/binary, "\n", Text/binary, "\n\n">>.
 
@@ -100,6 +127,9 @@ parse_empty_biffer_test() ->
 
 parse_bad_buffer_test() ->
     ?assertEqual({error, incomplete}, decode(<<"this is not a packet">>)).
+
+parse_bad_packet_test() ->
+    ?assertEqual({error, malformed}, decode(<<"msg:\n\n">>)).
 
 parse_unknown_packet_test() ->
     ?assertEqual({error, unknown}, decode(<<"undefiend:", ?DELIMETER1/binary, "field", ?DELIMETER1/binary, ?DELIMETER1/binary>>)).
@@ -148,14 +178,77 @@ decode_all_skip_bad_data_test() ->
     Auth = auth_data(?DELIMETER1),
     BadData = <<"msg:\n\n">>,
 
-    ?assertMatch({error, {{failed_at, text}, [#auth{}]}}, decode_all(new(), <<Auth/binary, BadData/binary>>)).
+    ?assertMatch({error, {malformed, [#auth{}]}}, decode_all(new(), <<Auth/binary, BadData/binary>>)).
 
-decode_all_chan_calls_test() ->
+decode_partial_buffer_test() ->
     P = new(),
+    ?assertEqual({ok, {#protocol{buffer = <<"auth:\n">>}, []}}, decode_all(P, <<"auth:\n">>)).
 
-    {ok, {P1, []}} = decode_all(P, <<"auth:\n">>),
-    {ok, {P2, []}} = decode_all(P1, <<"alice\n">>),
-    {ok, {P3, []}} = decode_all(P2, <<"password\n">>),
-    {ok, {P4, []}} = decode_all(P3, <<"\n">>).
+decode_incremental_buffer_test() ->
+    P = new(),
+    {ok, {#protocol{buffer = <<"auth:\n">>} = P1, []}} = decode_all(P, <<"auth:\n">>),
+
+    ?assertEqual({ok, {#protocol{buffer = <<"auth:\nalice\n">>}, []}}, decode_all(P1, <<"alice\n">>)).
+
+decode_all_chain_calls_auth_test() ->
+    Token1 = <<"auth:\n">>,
+    Token2 = <<"alice:\n">>,
+    Token3 = <<"password:\n">>,
+    Token4 = <<"\n">>,
+
+    Buffer1 = Token1,
+    Buffer2 = <<Token1/binary, Token2/binary>>,
+    Buffer3 = <<Token1/binary, Token2/binary, Token3/binary>>,
+
+    ?assertEqual({ok, {#protocol{buffer = Buffer1}, []}}, decode_all(new(), Token1)),
+    ?assertEqual({ok, {#protocol{buffer = Buffer2}, []}}, decode_all(#protocol{buffer = Buffer1}, Token2)),
+    ?assertEqual({ok, {#protocol{buffer = Buffer3}, []}}, decode_all(#protocol{buffer = Buffer2}, Token3)),
+    ?assertMatch({ok, {#protocol{buffer = <<>>}, [#auth{}]}}, decode_all(#protocol{buffer = Buffer3}, Token4)).
+
+decode_all_chain_calls_auth_success_test() ->
+    Token1 = <<"auth_sucess:\n">>,
+    Token2 = <<"\n">>,
+
+    ?assertEqual({ok, {#protocol{buffer = Token1}, []}}, decode_all(new(), Token1)),
+    ?assertMatch({ok, {#protocol{buffer = <<>>}, [#auth_sucess{}]}}, decode_all(#protocol{buffer = Token1}, Token2)).
+
+decode_all_chain_calls_auth_error_test() ->
+    Token1 = <<"auth_error:\n">>,
+    Token2 = <<"auth_error\n">>,
+    Token3 = <<"\n">>,
+
+    Buffer1 = Token1,
+    Buffer2 = <<Token1/binary, Token2/binary>>,
+
+    ?assertEqual({ok, {#protocol{buffer = Buffer1}, []}}, decode_all(new(), Token1)),
+    ?assertEqual({ok, {#protocol{buffer = Buffer2}, []}}, decode_all(#protocol{buffer = Buffer1}, Token2)),
+    ?assertMatch({ok, {#protocol{buffer = <<>>}, [#auth_error{}]}}, decode_all(#protocol{buffer = Buffer2}, Token3)).
+
+decode_all_chain_calls_msg_test() ->
+    Token1 = <<"msg:\n">>,
+    Token2 = <<"Hi there!\n">>,
+    Token3 = <<"\n">>,
+
+    Buffer1 = Token1,
+    Buffer2 = <<Token1/binary, Token2/binary>>,
+
+    ?assertEqual({ok, {#protocol{buffer = Buffer1}, []}}, decode_all(new(), Token1)),
+    ?assertEqual({ok, {#protocol{buffer = Buffer2}, []}}, decode_all(#protocol{buffer = Buffer1}, Token2)),
+    ?assertMatch({ok, {#protocol{buffer = <<>>}, [#message{from = undefined, txt = ?NE_BINARY_PAT}]}}, decode_all(#protocol{buffer = Buffer2}, Token3)).
+
+decode_all_chain_calls_signed_msg_test() ->
+    Token1 = <<"msg:\n">>,
+    Token2 = <<"Hi there\n">>,
+    Token3 = <<"alice\n">>,
+    Token4 = <<"\n">>,
+
+    Buffer1 = Token1,
+    Buffer2 = <<Token1/binary, Token2/binary>>,
+    Buffer3 = <<Token1/binary, Token2/binary, Token3/binary>>,
+
+    ?assertEqual({ok, {#protocol{buffer = Buffer1}, []}}, decode_all(new(), Token1)),
+    ?assertEqual({ok, {#protocol{buffer = Buffer2}, []}}, decode_all(#protocol{buffer = Buffer1}, Token2)),
+    ?assertEqual({ok, {#protocol{buffer = Buffer3}, []}}, decode_all(#protocol{buffer = Buffer2}, Token3)),
+    ?assertMatch({ok, {#protocol{buffer = <<>>}, [#message{from = ?NE_BINARY_PAT, txt = ?NE_BINARY_PAT}]}}, decode_all(#protocol{buffer = Buffer3}, Token4)).
 
 -endif.

@@ -7,12 +7,16 @@
     login :: binary(),
     passw :: binary()
 }).
+-record(auth_sucess, {}).
+-record(auth_error, {
+    status :: binary() %%  <<"already_connected">> | <<"auth_error">>
+}).
 -record(message, {
     from :: binary() | undefined,
     txt :: binary()
 }).
 
--type packet() :: #auth{} | #message{}.
+-type packet() :: #auth{} | #auth_sucess{} | #auth_error{} | #message{}.
 
 -define(WORKER(Name, Args), #{id => Name, start => {Name, start_link, Args}, restart => transient, shutdown => 5, type => worker, modules => [Name]}).
 -define(SUPERV(Name), #{id => Name, start => {Name, start_link, []}, restart => transient, shutdown => infinity, type => supervisor, modules => [Name]}).

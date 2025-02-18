@@ -4,6 +4,7 @@
 -behaviour(gen_server).
 
 -include_lib("kernel/include/logger.hrl").
+-include_lib("common/include/common.hrl").
 
 -record(state, {sock, transport, protocol}).
 
@@ -28,12 +29,27 @@ handle_call(_Request, _From, #state{} = State) ->
 handle_cast(_Request, #state{} = State) ->
     {noreply, State}.
 
+handle_method(#auth{login = Login} = Auth, #state{} = State) ->
+    maybe
+      {_, ok}           ?= {auth_check,  srv_auth_db:authenticate(Auth)},
+      {_, ok}           ?= {connection_check, srv_session_db:try_write_session(Login, self())},
+      send(State, protocol:encode(#auth_sucess{}))
+    else
+        {auth_check, _} -> send(State, #auth_error{status = <<"auth_error">>});
+        {connection_check, _} -> send(State, #auth_error{status = <<"already_connected">>})
+    end,
+    State;
+handle_method(#message{} = Message, #state{} = State) ->
+    Connections = srv_session_db:query_connections(),
+    lists:foreach(fun (C) -> C ! {send, Message} end, Connections),
+    State.
+
 handle_info({tcp, Socket, Data}, #state{sock = Socket, protocol = Protocol} = State) ->
     ?LOG_DEBUG("inbound data: ~p", [Data]),
     NextState = case protocol:decode_all(Protocol, Data) of
         {ok, {NewProtocol, Packets}} ->
             ?LOG_INFO("inbound packets: ~p", [Packets]),
-            State#state{protocol = NewProtocol};
+            lists:foldl(fun handle_method/2, State#state{protocol = NewProtocol}, Packets);
         {error, {Reason, Packets}} ->
             ?LOG_INFO("can not parse due to ~p, got only ~p", [{error, Reason}, Packets]),
             State#state{protocol = protocol:new()}
@@ -56,3 +72,6 @@ peername(#state{sock = Socket, transport = Transport}) ->
     lists:flatten([
         lists:join($., Symbolic), ":", integer_to_list(Port)
     ]).
+
+send(#state{sock = Socket, transport = Transport}, Buffer) ->
+    Transport:send(Socket, Buffer).

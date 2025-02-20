@@ -67,6 +67,12 @@ handle_info({tcp_closed, Socket}, #state{sock = Socket} = State) ->
 handle_info({tcp_error, Socket, Reason}, #state{sock = Socket} = State) ->
     {stop, Reason, State};
 handle_info({send, PacketOfBuffer}, #state{} = State) ->
+    Buffer = case is_binary(PacketOfBuffer) of
+        true -> PacketOfBuffer;
+        false ->
+            protocol:encode(PacketOfBuffer)
+    end,
+    ?LOG_DEBUG("outbound data: ~p", [Buffer]),
     send(State, PacketOfBuffer),
     {noreply, State};
 handle_info(Info, #state{} = State) ->

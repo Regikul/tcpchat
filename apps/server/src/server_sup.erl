@@ -28,13 +28,14 @@ start_link() ->
 %%                  type => worker(),       % optional
 %%                  modules => modules()}   % optional
 init([]) ->
+    Port = list_to_integer(os:getenv("TCPCHAT_PORT", "5555")),
     SupFlags = #{strategy => one_for_one,
                  intensity => 1,
                  period => 1},
     ChildSpecs = [
         ?WORKER(srv_auth_db, []),
         ?WORKER(srv_session_db, []),
-        ranch:child_spec(chat_listener_pool, ranch_tcp, #{socket_opts => [{port, 5555}]}, srv_listener, [])
+        ranch:child_spec(chat_listener_pool, ranch_tcp, #{socket_opts => [{port, Port}]}, srv_listener, [])
     ],
     {ok, {SupFlags, ChildSpecs}}.
 

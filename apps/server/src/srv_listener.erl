@@ -31,7 +31,10 @@ handle_cast(Request, #state{} = State) ->
     ?LOG_INFO("unknown cast: ~p", [Request]),
     {noreply, State}.
 
-handle_method(#auth{login = Login} = Auth, #state{} = State) ->
+handle_method(#auth{}, #state{login = ?NE_BINARY_PAT} = State) ->
+    send(State, #auth_error{status = <<"already_connected">>}),
+    State;
+handle_method(#auth{login = Login} = Auth, #state{login = undefined} = State) ->
     maybe
       {_, ok}           ?= {auth_check,  srv_auth_db:authenticate(Auth)},
       {_, ok}           ?= {connection_check, srv_session_db:try_write_session(Login, self())},
@@ -45,6 +48,8 @@ handle_method(#auth{login = Login} = Auth, #state{} = State) ->
             send(State, #auth_error{status = <<"already_connected">>}),
             State
     end;
+handle_method(#message{} = _Message, #state{login = undefined} = State) ->
+    State;
 handle_method(#message{} = Message, #state{login = Login} = State) ->
     Connections = srv_session_db:query_connections(),
     lists:foreach(fun (C) -> C ! {send, Message#message{from = Login}} end, Connections),

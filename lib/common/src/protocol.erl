@@ -24,6 +24,7 @@ new() ->
 decode_all(#protocol{buffer = Buffer}, ?NE_BINARY_PAT = Append) ->
     decode_loop(#protocol{buffer = <<Buffer/binary, Append/binary>>}, []).
 
+-dialyzer({no_match, decode_loop/2}).
 decode_loop(#protocol{buffer = Buffer} = P, Acc) when is_list(Acc) ->
     case decode(Buffer) of
         {ok, {Packet, Rest}} -> decode_loop(#protocol{buffer = Rest}, [Packet | Acc]);
@@ -40,8 +41,8 @@ decode(Input) ->
         [Method, Rest] -> decode(Method, Rest)
     end.
 
+-spec decode(binary(), binary()) -> {ok, {packet(), binary()}} | {error, {failed_at, atom()} | malformed | incomplete | unknown}.
 decode(<<"auth:">>, Rest) ->
-    ?LOG_INFO("trying to parse auth: ~p", [Rest]),
     maybe
         {_, [?NE_BINARY_PAT = Login, MaybePassw]}     ?= {login, split(Rest)},
         {_, [?NE_BINARY_PAT = Passw, MaybeFinalizer]} ?= {passw, split(MaybePassw)},
@@ -84,8 +85,9 @@ decode(<<"auth_error:">>, Rest) ->
         {Step, _} -> {error, {'failed_at', Step}}
     end;
 decode(_Method, _) ->
-    {error, 'unknown'}.
+    {error, unknown}.
 
+-spec encode(packet()) -> binary().
 encode(#auth{login = Login, passw = Password}) ->
     <<"auth:\n", Login/binary, "\n", Password/binary, "\n\n">>;
 encode(#auth_sucess{}) ->

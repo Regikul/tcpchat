@@ -9,6 +9,7 @@
 -export([init/1, handle_continue/2, handle_call/3, handle_cast/2, handle_info/2]).
 -export([send_message/2]).
 
+-spec send_message(pid(), binary()) -> ok.
 send_message(Server, Message) ->
     gen_server:cast(Server, {send_message, Message}).
 

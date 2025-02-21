@@ -23,5 +23,10 @@ init(_) ->
     ],
     {ok, {SupFlags, ChildSpecs}}.
 
+-spec start_user(binary(), binary()) -> {ok, pid()}.
 start_user(Login, Password) ->
-    supervisor:start_child(?SERVER, [Login, Password]).
+    case supervisor:start_child(?SERVER, [Login, Password]) of
+        {ok, _} = Ok -> Ok;
+        {'ok', Pid, _} -> {ok, Pid};
+        {error, {'already_started', Pid}} -> {ok, Pid}
+    end.

@@ -21,9 +21,11 @@
 
 -record(state, {tab}).
 
+-spec register(binary(), binary()) -> ok.
 register(Login, Password) ->
   gen_server:cast(?SERVER, {register, #auth{login = Login, passw = Password}}).
 
+-spec authenticate(#auth{}) -> ok | {error, atom()}.
 authenticate(#auth{login = Login, passw = Password}) ->
   case ets:lookup(?TAB, Login) of
     [#auth{passw = Password}] -> ok;

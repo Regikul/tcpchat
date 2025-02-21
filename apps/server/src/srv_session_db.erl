@@ -14,13 +14,19 @@
 -record(state, {tab}).
 -record(session, {user, connection}).
 
+-spec try_write_session(binary(), pid()) -> ok | {error, already_connected}.
 try_write_session(Login, Pid) ->
     gen_server:call(?SERVER, {try_write_conn, Login, Pid}).
 
+-spec query_connections() -> [pid()].
 query_connections() ->
     Self = self(),
     ets:foldl(session_fold(Self), [], ?TAB).
 
+-spec session_fold(pid()) -> Closure
+    when
+        Closure :: fun((#session{}, Pids) -> Pids),
+        Pids    :: [pid()].
 session_fold(Exclude) ->
     fun (#session{connection = Pid}, Acc) ->
         case Pid of

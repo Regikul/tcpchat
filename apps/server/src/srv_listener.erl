@@ -79,9 +79,11 @@ handle_info(Info, #state{} = State) ->
     ?LOG_INFO("unknown info: ~p", [Info]),
     {noreply, State}.
 
+-spec setopts(#state{}, list()) -> ok | {error, atom()}.
 setopts(#state{sock = Socket, transport = Transport}, Opts) ->
     Transport:setopts(Socket, Opts).
 
+-spec peername(#state{}) -> string().
 peername(#state{sock = Socket, transport = Transport}) ->
     {ok, {Addr, Port}} = Transport:peername(Socket),
     Symbolic = lists:map(fun integer_to_list/1, tuple_to_list(Addr)),
@@ -89,6 +91,7 @@ peername(#state{sock = Socket, transport = Transport}) ->
         lists:join($., Symbolic), ":", integer_to_list(Port)
     ]).
 
+-spec send(#state{}, binary() | packet()) -> ok | {error, atom()}.
 send(#state{sock = Socket, transport = Transport}, ?NE_BINARY_PAT = Buffer) ->
     Transport:send(Socket, Buffer);
 send(#state{sock = Socket, transport = Transport}, Packet) ->
